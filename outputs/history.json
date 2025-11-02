@@ -1,0 +1,10 @@
+[
+  {
+    "id": "a4047115-d2eb-48e3-90a9-a42f9e06caa6",
+    "text": "To enable controller force feedback in game, go to Controls, then Force Feedback. Select your controller from the dropdown, enable Force Feedback, choose \"Gamepad Vibration\" as the feedback type, and adjust the strength. Apply the changes for vibration to work during crashes. ",
+    "lang": "en",
+    "voice_path": "D:\\Code\\test\\btl-python-tts\\tts-offline\\outputs\\voices\\voice_0209d3a801a94f8da87a323d6d66b137.mp3",
+    "output_path": "D:\\Code\\test\\btl-python-tts\\tts-offline\\outputs\\xtts_output_5c6df56fb04c494fa0857bf8e2a924ce.wav",
+    "created_at": "2025-11-03T02:35:48"
+  }
+]

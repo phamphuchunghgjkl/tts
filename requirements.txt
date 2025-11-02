@@ -1,0 +1,9 @@
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+numpy==1.22.0
+transformers==4.44.2
+tokenizers<0.21
+TTS==0.22.0
+streamlit==1.37.1
+ffmpeg-python
