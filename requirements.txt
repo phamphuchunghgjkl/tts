@@ -7,3 +7,4 @@ tokenizers<0.21
 TTS==0.22.0
 streamlit==1.37.1
 ffmpeg-python
+pip install streamlit_authenticator
