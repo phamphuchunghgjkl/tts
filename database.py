@@ -1,7 +1,7 @@
 import mysql.connector
 import uuid
 import datetime
-import yaml # Mới
+import yaml 
 from pathlib import Path
 from yaml.loader import SafeLoader
 
@@ -34,7 +34,6 @@ def init_db():
         return
     
     cursor = conn.cursor()
-    # Câu lệnh SQL này tương thích với cả SQLite và MySQL
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS history (
         id VARCHAR(36) PRIMARY KEY,
@@ -47,7 +46,6 @@ def init_db():
         INDEX(username)
     )
     """)
-    # Tạo bảng users để lưu trữ tài khoản (username và password hash)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id VARCHAR(36) PRIMARY KEY,
@@ -176,10 +174,8 @@ def load_history(username: str) -> list:
     conn = get_db_connection()
     if not conn:
         return []
-    
-    # dictionary=True là rất quan trọng!
-    # Nó giúp trả về kết quả dạng dict, giống hệt sqlite3.Row
-    # Do đó app.py không cần thay đổi
+    # dictionary=True 
+    # Nó giúp trả về kết quả dạng dict
     cursor = conn.cursor(dictionary=True) 
     
     sql = "SELECT * FROM history WHERE username = %s ORDER BY created_at DESC"
@@ -200,36 +196,55 @@ def delete_history_item(username: str, item_id: str):
     conn = get_db_connection()
     if not conn:
         return
-
     try:
-        # Lấy đường dẫn file để xoá file vật lý
+        # Ensure the item exists and belongs to the given user before deleting.
         cursor_select = conn.cursor(dictionary=True)
-        sql_select = "SELECT voice_path, output_path FROM history WHERE id = %s AND username = %s"
-        cursor_select.execute(sql_select, (item_id, username))
+        sql_select = "SELECT voice_path, output_path, username FROM history WHERE id = %s LIMIT 1"
+        cursor_select.execute(sql_select, (item_id,))
         result = cursor_select.fetchone()
         cursor_select.close()
 
-        if result:
-            # Xoá file vật lý
-            if Path(result["output_path"]).exists():
-                try: Path(result["output_path"]).unlink()
-                except Exception: pass
-            if Path(result["voice_path"]).exists():
-                try: Path(result["voice_path"]).unlink()
-                except Exception: pass
-        
-        # Xoá record khỏi database
+        if not result:
+            # nothing to delete
+            conn.close()
+            return False
+
+        # check ownership
+        row_user = result.get('username')
+        if row_user != username:
+            # don't delete if usernames don't match
+            conn.close()
+            return False
+
+        # delete physical files if present
+        try:
+            if result.get("output_path") and Path(result["output_path"]).exists():
+                Path(result["output_path"]).unlink()
+        except Exception:
+            pass
+        try:
+            if result.get("voice_path") and Path(result["voice_path"]).exists():
+                Path(result["voice_path"]).unlink()
+        except Exception:
+            pass
+
+        # delete the record by id (safe, single-row)
         cursor_delete = conn.cursor()
-        sql_delete = "DELETE FROM history WHERE id = %s AND username = %s"
-        cursor_delete.execute(sql_delete, (item_id, username))
+        sql_delete = "DELETE FROM history WHERE id = %s"
+        cursor_delete.execute(sql_delete, (item_id,))
         conn.commit()
         cursor_delete.close()
+        conn.close()
+        return True
 
     except mysql.connector.Error as err:
         print(f"Lỗi khi DELETE: {err}")
-        conn.rollback()
-    finally:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         conn.close()
+        return False
 
 def get_history_item(item_id: str) -> dict:
     """Lấy một mục lịch sử cụ thể bằng ID (dùng cho chức năng Sửa)."""
