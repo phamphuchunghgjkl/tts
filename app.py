@@ -1,9 +1,7 @@
 import streamlit as st
 from pathlib import Path
 import uuid
-import datetime
 import os
-import tempfile
 import yaml 
 import streamlit_authenticator as stauth 
 from streamlit_authenticator.utilities.hasher import Hasher
@@ -13,7 +11,22 @@ import database as db
 # Khởi tạo database
 db.init_db()
 
-st.set_page_config(page_title="XTTS v2 — TTS Offline", page_icon="🗣️", layout="wide")
+# Helper to trigger a rerun in a way that's compatible across Streamlit versions
+def do_rerun():
+    try:
+        # Preferred public API when available
+        st.experimental_rerun()
+    except Exception:
+        try:
+            # Fallback to internal request if present
+            from streamlit.runtime.scriptrunner import script_request_rerun
+
+            script_request_rerun()
+        except Exception:
+            # Final fallback: stop execution and rely on next user action
+            st.stop()
+
+st.set_page_config(page_title="XTTS v2", page_icon="🗣️", layout="wide")
 
 # theme 
 st.markdown(
@@ -37,7 +50,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-# --- PHẦN XÁC THỰC (MỚI) ---
+# --- PHẦN XÁC THỰC ---
 with open('config.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
 
@@ -49,7 +62,6 @@ authenticator = stauth.Authenticate(
 )
 
 # Load users from MySQL into the authenticator's in-memory credentials so login works
-# even if users were created earlier and stored only in the DB.
 try:
     model = authenticator.authentication_controller.authentication_model
     users = db.list_users()
@@ -78,12 +90,10 @@ try:
             # _register_credentials will hash the password and persist to model.credentials
             model._register_credentials(uname_key, first_name, last_name, pw, email, "", None)
 except Exception:
-    # If DB not available or any error, silently continue; app will still work with config file users.
     pass
 
-# Nếu chưa đăng nhập, hiển thị 2 tab: Đăng nhập và Đăng ký
-# - Tab 1: login form (rendered bởi streamlit-authenticator)
-# - Tab 2: register form (sử dụng register_user). Sau khi đăng ký thành công, yêu cầu người dùng đăng nhập.
+# - Tab 1: login form 
+# - Tab 2: register form 
 name = st.session_state.get('name')
 authentication_status = st.session_state.get('authentication_status')
 username = st.session_state.get('username')
@@ -96,7 +106,7 @@ if not authentication_status:
         authenticator.login('main')
 
     with signup_tab:
-        # Simple registration form that only asks for name, username and password.
+        # registration form
         with st.form(key='simple_register'):
             reg_name = st.text_input('Họ & Tên')
             reg_username = st.text_input('Tên đăng nhập')
@@ -130,26 +140,28 @@ if not authentication_status:
                     # requires an email field. Use example.com to avoid accidental delivery.
                     reg_email = f"{username_key}@example.com"
 
-                    # Bypass password complexity validation by registering directly via the
-                    # AuthenticationModel internal _register_credentials method. This avoids
-                    # the Validator checks performed in AuthenticationController.register_user.
                     model = authenticator.authentication_controller.authentication_model
 
-                    # Check for existing username/email to avoid collisions (use normalized key)
-                    if username_key in model.credentials.get('usernames', {}):
+                    # Check DB first to avoid conflicts across restarts
+                    existing = db.get_user(username_key)
+                    if existing:
+                        st.error('Tên đăng nhập đã tồn tại (trong DB). Vui lòng chọn tên khác.')
+                    elif username_key in model.credentials.get('usernames', {}):
                         st.error('Tên đăng nhập đã tồn tại. Vui lòng chọn tên khác.')
-                    elif model._credentials_contains_value(reg_email):
-                        st.error('Email đã tồn tại. Vui lòng chọn tên đăng nhập khác.')
                     else:
+                        # Register in the authenticator model (it will hash the password)
                         model._register_credentials(username_key, first_name, last_name,
                                                     reg_password, reg_email, "", None)
-                        # Persist user to MySQL users table (store hashed password)
-                        # Store the password exactly as entered (plaintext) if you explicitly
-                        # want that behaviour. WARNING: this is insecure and not recommended.
-                        try:
-                            db.add_user(username_key, reg_password, first_name, last_name, reg_email)
-                        except Exception as e:
-                            st.warning(f"Đã đăng ký trong config nhưng không lưu vào DB: {e}")
+
+                        # Retrieve the hashed password produced by the model and persist to DB
+                        pw_hash = model.credentials['usernames'][username_key].get('password')
+                        if not pw_hash:
+                            st.warning('Đã tạo user nhưng không lấy được hash mật khẩu để lưu DB.')
+                        else:
+                            saved = db.add_user(username_key, pw_hash, first_name, last_name, reg_email)
+                            if not saved:
+                                st.warning('Đã tạo user trong bộ nhớ nhưng không lưu vào DB.')
+
                         st.success('Đăng ký thành công! Vui lòng đăng nhập (sử dụng tên đăng nhập viết thường).')
                 except Exception as e:
                     st.error(f'Lỗi khi đăng ký: {e}')
@@ -163,17 +175,16 @@ if authentication_status == False:
     st.error('Tên đăng nhập/Mật khẩu không đúng')
 elif authentication_status == None:
     st.warning('Vui lòng nhập tên đăng nhập và mật khẩu')
-# --- KẾT THÚC PHẦN XÁC THỰC ---
+# --- end authentication ---
 
-
-# === CHỈ HIỂN THỊ ỨNG DỤNG NẾU ĐÃ ĐĂNG NHẬP (MỚI) ===
+#hien ui sau khi dang nhap 
 if authentication_status:
     
-    # ---- Sidebar (Mới) ----
+    # ---- Sidebar ----
     with st.sidebar:
         st.title(f"Chào mừng, {name}!")
         authenticator.logout('Đăng xuất', 'main')
-    # ---- Hết Sidebar ----
+    # ---- Sidebar ----
     
     # load model 
     @st.cache_resource(show_spinner=True)
@@ -195,19 +206,25 @@ if authentication_status:
     if "edit_item_id" not in st.session_state:
         st.session_state.edit_item_id = None
 
-
     def set_edit_item(item_id: str):
         st.session_state.edit_item_id = item_id
 
-
     # ui
-    st.title("XTTS v2 — TTS Offline + Lịch sử bản thu âm")
+    st.title("XTTS v2 — Text to Speech ️")
+    # (needed so the "Sửa" button can jump back to the create view).
+    if 'active_tab' not in st.session_state:
+        st.session_state['active_tab'] = "Tạo bản thu âm"
+    active_tab = st.radio(
+        "",
+        ["Tạo bản thu âm", "Lịch sử"],
+        index=0 if st.session_state.get('active_tab') == "Tạo bản thu âm" else 1,
+        horizontal=True,
+    )
 
-    tab_make, tab_history = st.tabs(["Tạo bản thu âm", "Lịch sử"])
-
-    # tab 1: tao ban thu am 
-
-    with tab_make:
+    # tab 1: tao ban thu am
+    if active_tab == "Tạo bản thu âm":
+        # keep the active_tab in session_state so other handlers can change it
+        st.session_state['active_tab'] = "Tạo bản thu âm"
         with st.expander("Hướng dẫn nhanh", expanded=False):
             st.markdown(
                 """
@@ -246,7 +263,7 @@ if authentication_status:
         with col2:
             device_opt = st.selectbox("Thiết bị", ["auto", "cuda", "cpu"], index=0)
 
-        btn = st.button("🎙️ Tạo giọng nói", type="primary")
+        btn = st.button("Tạo giọng nói", type="primary")
 
         if btn:
             if not ref:
@@ -277,10 +294,10 @@ if authentication_status:
                     split_sentences=True,
                 )
 
-                # lưu vào lịch sử (ĐÃ THAY ĐỔI)
+                # lưu vào lịch sử 
                 # Dùng username từ st.session_state
                 db.add_history_item(
-                    username=username, # Quan trọng!
+                    username=username, 
                     text=text,
                     lang=lang,
                     voice_path=str(voice_path),
@@ -288,19 +305,18 @@ if authentication_status:
                 )
                 # hiển thị
                 audio_bytes = open(out_path, "rb").read()
-                st.success(f"✅ Hoàn tất! Đã lưu: {out_path.name} và ghi vào lịch sử.")
+                st.success(f"Đã lưu: {out_path.name} và ghi vào lịch sử.")
                 st.audio(audio_bytes, format="audio/wav")
                 st.download_button(
-                    "⬇️ Tải file WAV", data=audio_bytes, file_name=out_path.name
+                    "Tải file WAV", data=audio_bytes, file_name=out_path.name
                 )
                 # sau khi tạo xong thì bỏ trạng thái edit
                 st.session_state.edit_item_id = None
 
     # tab 2: lich su
-    with tab_history:
-        st.subheader(f"📜 Lịch sử của {name}")
-        
-        # Tải lịch sử cho user hiện tại (ĐÃ THAY ĐỔI)
+    if active_tab == "Lịch sử":
+        st.subheader(f"Lịch sử của {name}")
+        # Tải lịch sử cho user hiện tại 
         items = db.load_history(username) 
         
         if not items:
@@ -310,7 +326,6 @@ if authentication_status:
             for item in items:
                 with st.container():
                     st.markdown('<div class="history-row">', unsafe_allow_html=True)
-
                     c1, c2, c3, c4 = st.columns([4, 2, 1, 1])
                     with c1:
                         st.markdown(
@@ -334,22 +349,27 @@ if authentication_status:
                     # nút sửa (nạp lên tab 1)
                     with c3:
                         if st.button("Sửa", key=f"edit_{item['id']}"):
+                            # set edit id and switch to the create tab
                             set_edit_item(item['id'])
-                            # Thông báo, vì Streamlit không thể tự chuyển tab
-                            st.info("Đã tải dữ liệu. Quay lại tab 'Tạo bản thu âm' để sửa.")
-                            st.experimental_rerun() # Rerun để tab 1 nhận state mới
+                            st.session_state['active_tab'] = "Tạo bản thu âm"
+                            st.info("Đã tải dữ liệu. Đã chuyển sang tab 'Tạo bản thu âm' để sửa.")
+                            do_rerun()
                             
                     # nút xoá
                     with c4:
                         if st.button("Xoá", key=f"del_{item['id']}"):
                             # Xoá khỏi DB và xoá file vật lý (ĐÃ THAY ĐỔI)
-                            db.delete_history_item(username, item['id'])
-                            st.experimental_rerun()
+                            deleted = db.delete_history_item(username, item['id'])
+                            if deleted:
+                                st.success("Đã xoá mục lịch sử.")
+                            else:
+                                st.error("Không thể xoá mục. Vui lòng thử lại.")
+                            do_rerun()
 
                     # nút download riêng
                     if Path(item["output_path"]).exists():
                         st.download_button(
-                            "⬇️ Tải",
+                            "Tải",
                             data=Path(item["output_path"]).read_bytes(),
                             file_name=Path(item["output_path"]).name,
                             key=f"dl_{item['id']}",
